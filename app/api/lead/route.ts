@@ -1,0 +1,170 @@
+import { NextResponse } from "next/server";
+import crypto from "crypto";
+
+export const runtime = "nodejs";
+
+interface LeadBody {
+  name: string;
+  phone: string;
+  agreed?: boolean;
+  event_id: string;
+  fbp?: string;
+  fbc?: string;
+  source?: string;
+}
+
+function escapeHtml(text: string): string {
+  if (!text) return "";
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function normalizePhone(raw: string): string {
+  const d = raw.replace(/\D/g, "");
+  if (d.startsWith("998")) return d;
+  if (d.length === 9) return "998" + d;
+  return d;
+}
+
+function sha256(value: string): string {
+  return crypto.createHash("sha256").update(value.trim().toLowerCase()).digest("hex");
+}
+
+export async function POST(req: Request) {
+  try {
+    const body: LeadBody = await req.json();
+    const { name, phone, agreed, event_id, fbp, fbc, source } = body;
+
+    if (!name || name.trim().length < 2) {
+      return NextResponse.json({ error: "Ism kiritilmagan" }, { status: 400 });
+    }
+    if (!phone || phone.replace(/\D/g, "").length < 9) {
+      return NextResponse.json({ error: "Telefon raqami noto'g'ri" }, { status: 400 });
+    }
+
+    // 1) TELEGRAM — asosiy, ishonchli yo'l
+    const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN?.trim();
+    const GROUP_ID = process.env.TELEGRAM_GROUP_ID?.trim();
+
+    if (!BOT_TOKEN || !GROUP_ID) {
+      return NextResponse.json(
+        { error: "Server konfiguratsiya xatosi (Telegram env yo'q)" },
+        { status: 500 }
+      );
+    }
+
+    const text = [
+      "\u{1F697} <b>Yangi buyurtma \u2014 Damber Kids</b>",
+      "",
+      `\u{1F464} <b>Ism:</b> ${escapeHtml(name)}`,
+      `\u{1F4DE} <b>Telefon:</b> ${escapeHtml(phone)}`,
+      `\u2705 <b>Xaridga rozi:</b> ${agreed ? "Ha (narxni ko'rdi)" : "\u2014"}`,
+      `\u{1F310} <b>Manba:</b> ${escapeHtml(source || "damber-kids")}`,
+    ].join("\n");
+
+    const tgRes = await fetch(
+      `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: GROUP_ID, text, parse_mode: "HTML" }),
+      }
+    );
+    const tgResult = await tgRes.json();
+
+    if (!tgRes.ok || !tgResult.ok) {
+      console.error("TELEGRAM XATO:", JSON.stringify(tgResult));
+      return NextResponse.json(
+        {
+          error: "Telegram'ga yuborilmadi",
+          telegram_error_code: tgResult.error_code,
+          telegram_description: tgResult.description,
+        },
+        { status: 502 }
+      );
+    }
+
+    // 2) META CAPI — server Lead event (env bo'lsa)
+    const PIXEL_ID = process.env.META_PIXEL_ID?.trim();
+    const CAPI_TOKEN = process.env.META_CAPI_TOKEN?.trim();
+
+    if (PIXEL_ID && CAPI_TOKEN && event_id) {
+      try {
+        const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "";
+        const ua = req.headers.get("user-agent") || "";
+        const eventUrl = req.headers.get("referer") || "https://damber-kids.vercel.app/";
+
+        const userData: Record<string, unknown> = {
+          ph: [sha256(normalizePhone(phone))],
+          client_ip_address: ip,
+          client_user_agent: ua,
+        };
+        if (fbp) userData.fbp = fbp;
+        if (fbc) userData.fbc = fbc;
+
+        const capiRes = await fetch(
+          `https://graph.facebook.com/v21.0/${PIXEL_ID}/events?access_token=${CAPI_TOKEN}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              data: [
+                {
+                  event_name: "Lead",
+                  event_time: Math.floor(Date.now() / 1000),
+                  event_id,
+                  action_source: "website",
+                  event_source_url: eventUrl,
+                  user_data: userData,
+                },
+              ],
+            }),
+          }
+        );
+        if (!capiRes.ok) {
+          console.error("CAPI XATO:", await capiRes.text());
+        }
+      } catch (capiErr) {
+        console.error("CAPI EXCEPTION:", capiErr);
+      }
+    }
+
+    // 3) AMOCRM — ixtiyoriy (env bo'lsa)
+    const AMO_SUBDOMAIN = process.env.AMOCRM_SUBDOMAIN?.trim();
+    const AMO_TOKEN = process.env.AMOCRM_ACCESS_TOKEN?.trim();
+    const AMO_PIPELINE_ID = process.env.AMOCRM_PIPELINE_ID?.trim();
+    const AMO_STATUS_ID = process.env.AMOCRM_STATUS_ID?.trim();
+
+    if (AMO_SUBDOMAIN && AMO_TOKEN) {
+      try {
+        const leadPayload: Record<string, unknown> = { name: `Damber Kids \u2014 ${name}` };
+        if (AMO_PIPELINE_ID) leadPayload.pipeline_id = Number(AMO_PIPELINE_ID);
+        if (AMO_STATUS_ID) leadPayload.status_id = Number(AMO_STATUS_ID);
+
+        const amoRes = await fetch(
+          `https://${AMO_SUBDOMAIN}.amocrm.ru/api/v4/leads`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${AMO_TOKEN}`,
+            },
+            body: JSON.stringify([leadPayload]),
+          }
+        );
+        if (!amoRes.ok) {
+          console.error("AMOCRM XATO:", await amoRes.text());
+        }
+      } catch (amoErr) {
+        console.error("AMOCRM EXCEPTION:", amoErr);
+      }
+    }
+
+    return NextResponse.json({ success: true });
+  } catch (err) {
+    console.error("SERVER XATO:", err);
+    return NextResponse.json(
+      { error: "Server xatosi", detail: String(err) },
+      { status: 500 }
+    );
+  }
+}
