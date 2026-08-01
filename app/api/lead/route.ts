@@ -53,12 +53,12 @@ export async function POST(req: Request) {
     }
 
     const text = [
-      "\u{1F697} <b>Yangi buyurtma \u2014 Damber Kids</b>",
+      "🚗 <b>Yangi buyurtma — Damber Kids</b>",
       "",
-      `\u{1F464} <b>Ism:</b> ${escapeHtml(name)}`,
-      `\u{1F4DE} <b>Telefon:</b> ${escapeHtml(phone)}`,
-      `\u2705 <b>Xaridga rozi:</b> ${agreed ? "Ha (narxni ko'rdi)" : "\u2014"}`,
-      `\u{1F310} <b>Manba:</b> ${escapeHtml(source || "damber-kids")}`,
+      `👤 <b>Ism:</b> ${escapeHtml(name)}`,
+      `📞 <b>Telefon:</b> ${escapeHtml(phone)}`,
+      `✅ <b>Xaridga rozi:</b> ${agreed ? "Ha (narxni ko'rdi)" : "—"}`,
+      `🌐 <b>Manba:</b> ${escapeHtml(source || "damber-kids")}`,
     ].join("\n");
 
     const tgRes = await fetch(
@@ -91,7 +91,7 @@ export async function POST(req: Request) {
       try {
         const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "";
         const ua = req.headers.get("user-agent") || "";
-        const eventUrl = req.headers.get("referer") || "https://damber-kids.vercel.app/";
+        const eventUrl = req.headers.get("referer") || "https://damber-kids-ten.vercel.app/";
 
         const userData: Record<string, unknown> = {
           ph: [sha256(normalizePhone(phone))],
@@ -136,7 +136,7 @@ export async function POST(req: Request) {
 
     if (AMO_SUBDOMAIN && AMO_TOKEN) {
       try {
-        const leadPayload: Record<string, unknown> = { name: `Damber Kids \u2014 ${name}` };
+        const leadPayload: Record<string, unknown> = { name: `Damber Kids — ${name}` };
         if (AMO_PIPELINE_ID) leadPayload.pipeline_id = Number(AMO_PIPELINE_ID);
         if (AMO_STATUS_ID) leadPayload.status_id = Number(AMO_STATUS_ID);
 
