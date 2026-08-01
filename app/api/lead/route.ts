@@ -13,6 +13,8 @@ interface LeadBody {
   source?: string;
 }
 
+const PRODUCT_PRICE = 1900000; // Damber Kids narxi (UZS)
+
 function escapeHtml(text: string): string {
   if (!text) return "";
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -41,7 +43,10 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Telefon raqami noto'g'ri" }, { status: 400 });
     }
 
-    // 1) TELEGRAM — asosiy, ishonchli yo'l
+    const clientIp = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "";
+    const userAgent = req.headers.get("user-agent") || "";
+
+    // ============ 1) TELEGRAM — asosiy, ishonchli yo'l ============
     const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN?.trim();
     const GROUP_ID = process.env.TELEGRAM_GROUP_ID?.trim();
 
@@ -83,20 +88,17 @@ export async function POST(req: Request) {
       );
     }
 
-    // 2) META CAPI — server Lead event (env bo'lsa)
+    // ============ 2) META CAPI — Lead event ============
     const PIXEL_ID = process.env.META_PIXEL_ID?.trim();
     const CAPI_TOKEN = process.env.META_CAPI_TOKEN?.trim();
 
     if (PIXEL_ID && CAPI_TOKEN && event_id) {
       try {
-        const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "";
-        const ua = req.headers.get("user-agent") || "";
         const eventUrl = req.headers.get("referer") || "https://damber-kids-ten.vercel.app/";
-
         const userData: Record<string, unknown> = {
           ph: [sha256(normalizePhone(phone))],
-          client_ip_address: ip,
-          client_user_agent: ua,
+          client_ip_address: clientIp,
+          client_user_agent: userAgent,
         };
         if (fbp) userData.fbp = fbp;
         if (fbc) userData.fbc = fbc;
@@ -120,40 +122,72 @@ export async function POST(req: Request) {
             }),
           }
         );
-        if (!capiRes.ok) {
-          console.error("CAPI XATO:", await capiRes.text());
-        }
+        if (!capiRes.ok) console.error("CAPI XATO:", await capiRes.text());
       } catch (capiErr) {
         console.error("CAPI EXCEPTION:", capiErr);
       }
     }
 
-    // 3) AMOCRM — ixtiyoriy (env bo'lsa)
+    // ============ 3) AMOCRM — "Неразобранное" (kiruvchi lid) ============
+    // Lid Damber Kids voronkasining Неразобранное qutisiga tushadi.
+    // Menejer qabul qilgach, voronkaga o'tadi. Status ID kerak emas.
     const AMO_SUBDOMAIN = process.env.AMOCRM_SUBDOMAIN?.trim();
     const AMO_TOKEN = process.env.AMOCRM_ACCESS_TOKEN?.trim();
     const AMO_PIPELINE_ID = process.env.AMOCRM_PIPELINE_ID?.trim();
-    const AMO_STATUS_ID = process.env.AMOCRM_STATUS_ID?.trim();
 
-    if (AMO_SUBDOMAIN && AMO_TOKEN) {
+    if (AMO_SUBDOMAIN && AMO_TOKEN && AMO_PIPELINE_ID) {
       try {
-        const leadPayload: Record<string, unknown> = { name: `Damber Kids — ${name}` };
-        if (AMO_PIPELINE_ID) leadPayload.pipeline_id = Number(AMO_PIPELINE_ID);
-        if (AMO_STATUS_ID) leadPayload.status_id = Number(AMO_STATUS_ID);
+        const nowSec = Math.floor(Date.now() / 1000);
+        const uid = `damber-${nowSec}-${Math.random().toString(36).slice(2, 8)}`;
+
+        const unsorted = [
+          {
+            source_name: "Damber Kids sayt",
+            source_uid: uid,
+            created_at: nowSec,
+            pipeline_id: Number(AMO_PIPELINE_ID),
+            metadata: {
+              form_id: "damber-kids-form",
+              form_name: "Damber Kids buyurtma",
+              form_page: "https://damber-kids-ten.vercel.app",
+              form_sent_at: nowSec,
+              referer: "https://damber-kids-ten.vercel.app",
+              ip: clientIp,
+            },
+            embedded: {
+              contacts: [
+                {
+                  name: name,
+                  custom_fields_values: [
+                    {
+                      field_code: "PHONE",
+                      values: [{ enum_code: "WORK", value: phone }],
+                    },
+                  ],
+                },
+              ],
+              leads: [
+                {
+                  name: `Damber Kids — ${name}`,
+                  price: PRODUCT_PRICE,
+                },
+              ],
+            },
+          },
+        ];
 
         const amoRes = await fetch(
-          `https://${AMO_SUBDOMAIN}.amocrm.ru/api/v4/leads`,
+          `https://${AMO_SUBDOMAIN}.amocrm.ru/api/v4/leads/unsorted/forms`,
           {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
               Authorization: `Bearer ${AMO_TOKEN}`,
             },
-            body: JSON.stringify([leadPayload]),
+            body: JSON.stringify(unsorted),
           }
         );
-        if (!amoRes.ok) {
-          console.error("AMOCRM XATO:", await amoRes.text());
-        }
+        if (!amoRes.ok) console.error("AMOCRM XATO:", await amoRes.text());
       } catch (amoErr) {
         console.error("AMOCRM EXCEPTION:", amoErr);
       }
@@ -162,9 +196,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ success: true });
   } catch (err) {
     console.error("SERVER XATO:", err);
-    return NextResponse.json(
-      { error: "Server xatosi", detail: String(err) },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Server xatosi", detail: String(err) }, { status: 500 });
   }
 }
