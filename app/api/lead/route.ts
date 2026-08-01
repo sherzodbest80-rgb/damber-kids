@@ -46,7 +46,7 @@ export async function POST(req: Request) {
     const clientIp = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "";
     const userAgent = req.headers.get("user-agent") || "";
 
-    // ============ 1) TELEGRAM — asosiy, ishonchli yo'l ============
+    // ============ 1) TELEGRAM ============
     const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN?.trim();
     const GROUP_ID = process.env.TELEGRAM_GROUP_ID?.trim();
 
@@ -129,8 +129,7 @@ export async function POST(req: Request) {
     }
 
     // ============ 3) AMOCRM — "Неразобранное" (kiruvchi lid) ============
-    // Lid Damber Kids voronkasining Неразобранное qutisiga tushadi.
-    // Menejer qabul qilgach, voronkaga o'tadi. Status ID kerak emas.
+    let amocrm: unknown = "skipped (env yo'q)";
     const AMO_SUBDOMAIN = process.env.AMOCRM_SUBDOMAIN?.trim();
     const AMO_TOKEN = process.env.AMOCRM_ACCESS_TOKEN?.trim();
     const AMO_PIPELINE_ID = process.env.AMOCRM_PIPELINE_ID?.trim();
@@ -146,15 +145,7 @@ export async function POST(req: Request) {
             source_uid: uid,
             created_at: nowSec,
             pipeline_id: Number(AMO_PIPELINE_ID),
-            metadata: {
-              form_id: "damber-kids-form",
-              form_name: "Damber Kids buyurtma",
-              form_page: "https://damber-kids-ten.vercel.app",
-              form_sent_at: nowSec,
-              referer: "https://damber-kids-ten.vercel.app",
-              ip: clientIp,
-            },
-            embedded: {
+            _embedded: {
               contacts: [
                 {
                   name: name,
@@ -173,6 +164,14 @@ export async function POST(req: Request) {
                 },
               ],
             },
+            metadata: {
+              form_id: "damber-kids-form",
+              form_name: "Damber Kids buyurtma",
+              form_page: "https://damber-kids-ten.vercel.app",
+              form_sent_at: nowSec,
+              referer: "https://damber-kids-ten.vercel.app",
+              ip: clientIp,
+            },
           },
         ];
 
@@ -187,13 +186,27 @@ export async function POST(req: Request) {
             body: JSON.stringify(unsorted),
           }
         );
-        if (!amoRes.ok) console.error("AMOCRM XATO:", await amoRes.text());
+        const amoText = await amoRes.text();
+        if (!amoRes.ok) {
+          console.error("AMOCRM XATO:", amoText);
+          amocrm = { status: amoRes.status, error: amoText };
+        } else {
+          amocrm = { status: amoRes.status, ok: true };
+        }
       } catch (amoErr) {
         console.error("AMOCRM EXCEPTION:", amoErr);
+        amocrm = { exception: String(amoErr) };
       }
+    } else {
+      amocrm = {
+        skipped: true,
+        has_subdomain: !!AMO_SUBDOMAIN,
+        has_token: !!AMO_TOKEN,
+        has_pipeline: !!AMO_PIPELINE_ID,
+      };
     }
 
-    return NextResponse.json({ success: true });
+    return NextResponse.json({ success: true, amocrm });
   } catch (err) {
     console.error("SERVER XATO:", err);
     return NextResponse.json({ error: "Server xatosi", detail: String(err) }, { status: 500 });
